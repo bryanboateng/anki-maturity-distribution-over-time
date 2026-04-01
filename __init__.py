@@ -51,20 +51,6 @@ def get_card_category(revlog_type, last_interval_days):
     return CAT_LEARNING  # Default
 
 
-def fsrs_retrievability(elapsed_days, stability):
-    """
-    Calcula a retrievability.
-    Para este gráfico, usamos a fórmula do FSRS-4.5 que é mais robusta
-    quando a estabilidade (S) é apenas uma aproximação (usando o ivl).
-    A fórmula do FSRS-6 é muito sensível e produz valores irrealistas sem a S real.
-    """
-    if stability <= 0:
-        return 0.0
-
-    # Fórmula FSRS-4.5: R(t) = (1 + t / (9 * S)) ^ -1
-    return math.pow(1.0 + elapsed_days / (9.0 * stability), -1.0)
-
-
 def get_card_evolution_data(self_instance, graph_id="evolutionGraph"):
     period_days = self_instance._periodDays()
 
@@ -181,8 +167,6 @@ def get_card_evolution_data(self_instance, graph_id="evolutionGraph"):
 
     card_current_states = {}
     daily_graph_data_points = {}
-    daily_etk_points = {}
-    daily_etk_percent_points = {}
 
     current_rev_idx = 0
     for day_offset in range(graph_start_day_idx, 1):  # Itera dia a dia
@@ -213,8 +197,6 @@ def get_card_evolution_data(self_instance, graph_id="evolutionGraph"):
         }
 
         # Laço unificado para cálculo
-        total_retrievability_for_day = 0
-        active_cards_for_etk = 0
         day_counts_recalc = {
             CAT_LEARNING: 0,
             CAT_YOUNG: 0,
@@ -224,7 +206,6 @@ def get_card_evolution_data(self_instance, graph_id="evolutionGraph"):
 
         for cid, state in card_current_states.items():
             if state["last_rev_time"] < current_day_end_ts_ms:
-                active_cards_for_etk += 1
                 day_counts_recalc[state["category"]] += 1
 
                 last_rev_day_s = state["last_rev_time"] / 1000
@@ -239,18 +220,8 @@ def get_card_evolution_data(self_instance, graph_id="evolutionGraph"):
                 )  # Usar ivl como aproximação de estabilidade, evitar divisão por zero
 
                 # Fórmula de Retrievability FSRS
-                retrievability = fsrs_retrievability(days_since_review, stability)
-                total_retrievability_for_day += retrievability
 
         day_counts = day_counts_recalc
-
-        daily_etk_points[day_offset] = total_retrievability_for_day
-        if active_cards_for_etk > 0:
-            daily_etk_percent_points[day_offset] = (
-                total_retrievability_for_day / active_cards_for_etk
-            ) * 100
-        else:
-            daily_etk_percent_points[day_offset] = 0
 
         if (
             day_offset > graph_start_day_idx
@@ -277,9 +248,7 @@ def get_card_evolution_data(self_instance, graph_id="evolutionGraph"):
         CAT_MATURE: {},
         CAT_RETAINED: {},
     }
-    aggregated_etk_data = {}
-    aggregated_etk_percent_data = {}
-    etk_percent_temp_accumulator = {}
+    bryans = []
 
     for day_idx in sorted(daily_graph_data_points.keys()):
         x_flot_chunk_idx = -math.floor(-day_idx / aggregation_chunk_days)
@@ -297,30 +266,11 @@ def get_card_evolution_data(self_instance, graph_id="evolutionGraph"):
             day_idx
         ][CAT_RETAINED]
 
-        aggregated_etk_data[x_flot_chunk_idx] = daily_etk_points.get(day_idx, 0)
-
-        if x_flot_chunk_idx not in etk_percent_temp_accumulator:
-            etk_percent_temp_accumulator[x_flot_chunk_idx] = []
-        etk_percent_temp_accumulator[x_flot_chunk_idx].append(
-            daily_etk_percent_points.get(day_idx, 0)
-        )
-
-    for chunk_idx, values in etk_percent_temp_accumulator.items():
-        if values:
-            aggregated_etk_percent_data[chunk_idx] = sum(values) / len(values)
-        else:
-            aggregated_etk_percent_data[chunk_idx] = 0
-
+        bryans.append(x_flot_chunk_idx)
     series = []
-    data_learning, data_young, data_mature, data_retained, data_etk_percent = (
-        [],
-        [],
-        [],
-        [],
-        [],
-    )
+    data_learning, data_young, data_mature, data_retained = ([], [], [], [])
 
-    all_x_flot_chunk_indices = sorted(list(set(aggregated_etk_data.keys())))
+    all_x_flot_chunk_indices = sorted(list(set(bryans)))
 
     if not all_x_flot_chunk_indices and graph_start_day_idx == 0:
         all_x_flot_chunk_indices.append(0)
@@ -337,9 +287,6 @@ def get_card_evolution_data(self_instance, graph_id="evolutionGraph"):
         )
         data_retained.append(
             [x_chunk_idx, aggregated_flot_data[CAT_RETAINED].get(x_chunk_idx, 0)]
-        )
-        data_etk_percent.append(
-            [x_chunk_idx, aggregated_etk_percent_data.get(x_chunk_idx, 0)]
         )
 
     config = mw.addonManager.getConfig(__name__)
@@ -380,18 +327,6 @@ def get_card_evolution_data(self_instance, graph_id="evolutionGraph"):
                 "bars": {"order": 4},
             }
         )
-
-    series.append(
-        {
-            "data": data_etk_percent,
-            "label": tr("label_avg_retention_percent"),
-            "color": "#FF6B35",
-            "lines": {"show": True, "lineWidth": 2, "fill": False},
-            "bars": {"show": False},
-            "stack": False,
-            "yaxis": 2,
-        }
-    )
 
     min_x_val_for_axis = 0
     max_x_val_for_axis = 0
@@ -447,13 +382,9 @@ function(val, axis) {{
 }}
 """
 
-    etk_percent_data_json = json.dumps(aggregated_etk_percent_data)
-    etk_abs_data_json = json.dumps(aggregated_etk_data)
-
     tooltip_html = f"""
 <script>
 $(function() {{
-    var etkAbsData = {etk_abs_data_json};
     var tooltip = $("#evolutionGraphTooltip");
     if (!tooltip.length) {{
         tooltip = $('<div id="evolutionGraphTooltip" style="position:absolute;display:none;padding:8px;background-color:#fff;border:1px solid #ddd;color:#333;border-radius:4px;box-shadow:0 2px 5px rgba(0,0,0,0.1);pointer-events:none;font-size:0.9em;z-index:100;"></div>').appendTo("body");
@@ -1101,29 +1032,6 @@ def init_main_screen_hooks():
 
 
 def main():
-    # Verificação de versão do Anki
-    anki_version = pointVersion()
-    print(f"Accumulated Retention Graph: Anki version detected - {anki_version}")
-
-    # Verificar se é uma versão compatível
-    if anki_version >= 256000:  # Anki 25.6+
-        print("Accumulated Retention Graph: Running on Anki 25.6+ (new versioning)")
-    elif anki_version >= 231000:  # Anki 23.10+
-        print("Accumulated Retention Graph: Running on Anki 23.10+ (new versioning)")
-    elif anki_version >= 45:  # Anki 2.1.45+
-        print(
-            "Accumulated Retention Graph: Running on Anki 2.1.45+ (legacy versioning)"
-        )
-    else:
-        print(
-            f"Accumulated Retention Graph: Warning - Running on older Anki version {anki_version}. This addon may not work properly."
-        )
-
-    # --- Nova seção de Hooking ---
-
-    # Tentar usar cardGraph (sem underscore)
-
-    # Guardar uma referência ao método original, se ainda não foi guardada por este addon
     if hasattr(stats.CollectionStats, TARGET_METHOD_NAME) and not hasattr(
         stats.CollectionStats, BACKUP_ATTR_NAME
     ):
@@ -1161,7 +1069,5 @@ def main():
     except Exception as e:
         print(f"Card Evolution: Erro ao inicializar hooks da tela principal: {e}")
 
-
-# ===== FIM DA INTEGRAÇÃO COM TELA PRINCIPAL =====
 
 main()
