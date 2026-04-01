@@ -155,6 +155,8 @@ def get_card_evolution_data(self_instance, graph_id="evolutionGraph"):
     
     if exclude_suspended:
         main_revlog_query_conditions.append("cid IN (SELECT id FROM cards WHERE queue != -1)")
+
+    main_revlog_query_conditions.append("type != 5")
     
     query = """
         SELECT id, cid, type, ivl
