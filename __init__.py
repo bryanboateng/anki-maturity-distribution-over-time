@@ -14,22 +14,6 @@ from aqt.overview import Overview, OverviewContent
 
 from .translations import tr  # Adicionado para tradução
 
-# Verificação de versão do Anki
-anki_version = pointVersion()
-print(f"Accumulated Retention Graph: Anki version detected - {anki_version}")
-
-# Verificar se é uma versão compatível
-if anki_version >= 256000:  # Anki 25.6+
-    print("Accumulated Retention Graph: Running on Anki 25.6+ (new versioning)")
-elif anki_version >= 231000:  # Anki 23.10+
-    print("Accumulated Retention Graph: Running on Anki 23.10+ (new versioning)")
-elif anki_version >= 45:  # Anki 2.1.45+
-    print("Accumulated Retention Graph: Running on Anki 2.1.45+ (legacy versioning)")
-else:
-    print(
-        f"Accumulated Retention Graph: Warning - Running on older Anki version {anki_version}. This addon may not work properly."
-    )
-
 # Card State Categories & Colors
 CAT_LEARNING = 0
 CAT_YOUNG = 1
@@ -45,6 +29,11 @@ COLOR_RETAINED = "#004080"  # Dark blue, adjust as needed
 INTERVAL_LEARNING_MAX = 7
 INTERVAL_YOUNG_MAX = 21
 INTERVAL_MATURE_MAX = 84
+
+TARGET_METHOD_NAME = "cardGraph"
+BACKUP_ATTR_NAME = (
+    "_cardGraph_original_by_evolution_addon"  # Manter nome do backup para consistência
+)
 
 
 def get_card_category(revlog_type, last_interval_days):
@@ -615,27 +604,6 @@ def render_card_evolution_graph(self_instance):
     return html
 
 
-# --- Nova seção de Hooking ---
-
-# Tentar usar cardGraph (sem underscore)
-TARGET_METHOD_NAME = "cardGraph"
-BACKUP_ATTR_NAME = (
-    "_cardGraph_original_by_evolution_addon"  # Manter nome do backup para consistência
-)
-
-# Guardar uma referência ao método original, se ainda não foi guardada por este addon
-if hasattr(stats.CollectionStats, TARGET_METHOD_NAME) and not hasattr(
-    stats.CollectionStats, BACKUP_ATTR_NAME
-):
-    setattr(
-        stats.CollectionStats,
-        BACKUP_ATTR_NAME,
-        getattr(stats.CollectionStats, TARGET_METHOD_NAME),
-    )
-elif not hasattr(stats.CollectionStats, TARGET_METHOD_NAME):
-    pass
-
-
 def add_evolution_graph_to_card_stats(self_instance, *original_args, **original_kwargs):
     """
     Wraps the original cardGraph method to append the evolution graph.
@@ -687,29 +655,6 @@ def add_evolution_graph_to_card_stats(self_instance, *original_args, **original_
     else:
         # Mostrar o gráfico de evolução DEPOIS do gráfico original (comportamento padrão)
         return original_card_graph_html + evolution_graph_html
-
-
-# Aplicar o wrap apenas se o método original e o backup existirem
-if hasattr(stats.CollectionStats, TARGET_METHOD_NAME) and hasattr(
-    stats.CollectionStats, BACKUP_ATTR_NAME
-):
-    current_target_method_func = getattr(stats.CollectionStats, TARGET_METHOD_NAME)
-    original_backup_func = getattr(stats.CollectionStats, BACKUP_ATTR_NAME)
-
-    # Desfazer o wrap se o método alvo não for já o original (ou seja, se já foi envolvido por nós)
-    if current_target_method_func != original_backup_func:
-        setattr(stats.CollectionStats, TARGET_METHOD_NAME, original_backup_func)
-
-    # Aplicar o wrap
-    setattr(
-        stats.CollectionStats,
-        TARGET_METHOD_NAME,
-        wrap(
-            original_backup_func,  # Envolver o original que guardamos
-            add_evolution_graph_to_card_stats,
-            "around",
-        ),
-    )
 
 
 # ===== INÍCIO DA INTEGRAÇÃO COM TELA PRINCIPAL =====
@@ -1155,10 +1100,68 @@ def init_main_screen_hooks():
         deck_browser_will_render_content.append(on_deck_browser_render)
 
 
-# Inicializar hooks da tela principal
-try:
-    init_main_screen_hooks()
-except Exception as e:
-    print(f"Card Evolution: Erro ao inicializar hooks da tela principal: {e}")
+def main():
+    # Verificação de versão do Anki
+    anki_version = pointVersion()
+    print(f"Accumulated Retention Graph: Anki version detected - {anki_version}")
+
+    # Verificar se é uma versão compatível
+    if anki_version >= 256000:  # Anki 25.6+
+        print("Accumulated Retention Graph: Running on Anki 25.6+ (new versioning)")
+    elif anki_version >= 231000:  # Anki 23.10+
+        print("Accumulated Retention Graph: Running on Anki 23.10+ (new versioning)")
+    elif anki_version >= 45:  # Anki 2.1.45+
+        print(
+            "Accumulated Retention Graph: Running on Anki 2.1.45+ (legacy versioning)"
+        )
+    else:
+        print(
+            f"Accumulated Retention Graph: Warning - Running on older Anki version {anki_version}. This addon may not work properly."
+        )
+
+    # --- Nova seção de Hooking ---
+
+    # Tentar usar cardGraph (sem underscore)
+
+    # Guardar uma referência ao método original, se ainda não foi guardada por este addon
+    if hasattr(stats.CollectionStats, TARGET_METHOD_NAME) and not hasattr(
+        stats.CollectionStats, BACKUP_ATTR_NAME
+    ):
+        setattr(
+            stats.CollectionStats,
+            BACKUP_ATTR_NAME,
+            getattr(stats.CollectionStats, TARGET_METHOD_NAME),
+        )
+    elif not hasattr(stats.CollectionStats, TARGET_METHOD_NAME):
+        pass
+    # Aplicar o wrap apenas se o método original e o backup existirem
+    if hasattr(stats.CollectionStats, TARGET_METHOD_NAME) and hasattr(
+        stats.CollectionStats, BACKUP_ATTR_NAME
+    ):
+        current_target_method_func = getattr(stats.CollectionStats, TARGET_METHOD_NAME)
+        original_backup_func = getattr(stats.CollectionStats, BACKUP_ATTR_NAME)
+
+        # Desfazer o wrap se o método alvo não for já o original (ou seja, se já foi envolvido por nós)
+        if current_target_method_func != original_backup_func:
+            setattr(stats.CollectionStats, TARGET_METHOD_NAME, original_backup_func)
+
+        # Aplicar o wrap
+        setattr(
+            stats.CollectionStats,
+            TARGET_METHOD_NAME,
+            wrap(
+                original_backup_func,  # Envolver o original que guardamos
+                add_evolution_graph_to_card_stats,
+                "around",
+            ),
+        )
+    # Inicializar hooks da tela principal
+    try:
+        init_main_screen_hooks()
+    except Exception as e:
+        print(f"Card Evolution: Erro ao inicializar hooks da tela principal: {e}")
+
 
 # ===== FIM DA INTEGRAÇÃO COM TELA PRINCIPAL =====
+
+main()
